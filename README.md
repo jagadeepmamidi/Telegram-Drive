@@ -8,12 +8,10 @@ your Telegram account into an unlimited, secure cloud storage drive. Built with
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20MacOS%20%7C%20Linux-blue)]()
-![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/caamer20/Telegram-Drive/total?style=flat)
-[![oosmetrics](https://api.oosmetrics.com/api/v1/badge/achievement/ae8e5a6b-e815-4799-a408-4a59980cf9c8.svg)](https://oosmetrics.com/repo/caamer20/Telegram-Drive)
-[![oosmetrics](https://api.oosmetrics.com/api/v1/badge/achievement/029fb97b-a54a-4566-a1eb-aa1a5039065d.svg)](https://oosmetrics.com/repo/caamer20/Telegram-Drive)
-[![oosmetrics](https://api.oosmetrics.com/api/v1/badge/achievement/2aa6f3f9-fd8a-4523-bd73-6625ee6a948a.svg)](https://oosmetrics.com/repo/caamer20/Telegram-Drive)
 
 </div>
+
+> This repository is a fork of [caamer20/Telegram-Drive](https://github.com/caamer20/Telegram-Drive), maintained independently. All ads and donation prompts from the upstream project have been removed.
 
 ![Auth Screen](screenshots/AuthScreen.png)
 
@@ -38,27 +36,17 @@ Telegram Drive leverages the Telegram API to allow you to upload, organize, and 
 *   **Privacy Focused**: API keys and data stay local. No third-party servers.
 *   **Cross-Platform**: Native apps for macOS (Intel/ARM), Windows, Linux and Android.
 
-## Android (Pre‑built, Unsigned APK)
+## Android
 
-A pre-built **unsigned APK** is available for Android sideloading via the [v2.1.5-android release](https://github.com/caamer20/Telegram-Drive/releases/tag/Androidv2.1.5beta).
-
-> [!WARNING]
-> This APK is **not signed** and is **not available on the Google Play Store**. You must enable "Install from Unknown Sources" on your device to install it. This build contains **Google AdMob banner ads** to support development.
-
-### How to Sideload
-
-1. Download `Telegram-Drive-v2.1.0-beta.apk` from the [v2.1.5-android release](https://github.com/caamer20/Telegram-Drive/releases/tag/Androidv2.1.5beta).
-2. On your Android device, go to **Settings → Apps → Special App Access → Install unknown apps** and allow your browser or file manager.
-3. Open the downloaded APK and tap **Install**.
-4. Enter your Telegram API credentials on first launch (same as the desktop app).
+The Android app can be built locally from this repository with the Tauri Android tooling (`npm run tauri android build`). The resulting APK is unsigned, so you must enable "Install from Unknown Sources" to sideload it.
 
 > [!NOTE]
 > - **Compatibility**: Requires **Android 7.0 (API level 24)** or higher.
-> - **Android 15+ Installation**: If you encounter blocks or security restrictions when installing on Android 15+ emulator/device, bypass it using ADB:
+> - **Android 15+ Installation**: If you encounter blocks or security restrictions when installing on an Android 15+ emulator/device, bypass them using ADB:
 >   ```bash
->   adb install --bypass-low-target-sdk-block Telegram-Drive-v2.1.0-beta.apk
+>   adb install --bypass-low-target-sdk-block <your-built-apk>.apk
 >   ```
-> - The Android build is a **community/beta release** compiled locally. The desktop app (Windows/macOS/Linux) remains the primary supported platform, built and signed automatically by GitHub CI.
+> - The desktop app (Windows/macOS/Linux) remains the primary supported platform, built and signed automatically by GitHub CI.
 
 ---
 
@@ -132,7 +120,7 @@ A pre-built **unsigned APK** is available for Android sideloading via the [v2.1.
 
 1.  **Clone the repository**
     ```bash
-    git clone https://github.com/caamer20/Telegram-Drive.git
+    git clone https://github.com/jagadeepmamidi/Telegram-Drive.git
     cd Telegram-Drive
     ```
 
@@ -156,40 +144,7 @@ A pre-built **unsigned APK** is available for Android sideloading via the [v2.1.
 
 This project is **Free and Open Source Software**. You are free to use, modify, and distribute it.
 
-Licensed under the **MIT License**.
+Licensed under the **MIT License**. Originally created by [Cameron Amer (caamer20)](https://github.com/caamer20).
 
 ---
 *Disclaimer: This application is not affiliated with Telegram FZ-LLC. Use responsibly and in accordance with Telegram's Terms of Service.*
-
-If you're looking for a version of this app that's optimized for VPNs check out this repo:
-https://github.com/caamer20/Telegram-Drive-ForVPNs
-
-<div align="center">
-  <!-- PayPal -->
-  <div style="margin: 15px 0;">
-    <a href="https://www.paypal.me/Caamer20">
-      <img src="https://raw.githubusercontent.com/stefan-niedermann/paypal-donate-button/master/paypal-donate-button.png" alt="Donate with PayPal" width="200">
-    </a>
-    <div style="font-size: 14px; margin-top: 8px;">paypal.me/Caamer20</div>
-  </div>
-
-  <!-- Litecoin -->
-  <div style="margin: 15px 0;">
-    <a href="litecoin:ltc1q6wkr5ac4u0pxx4hx7xgwn0gsaku25ws0df73rp">
-      <img src="https://img.shields.io/badge/Donate-LTC-345D9D?style=for-the-badge&logo=litecoin&logoColor=white" alt="Donate LTC">
-    </a>
-    <div style="font-family: monospace; font-size: 13px; margin-top: 8px; word-break: break-all;">
-      ltc1q6wkr5ac4u0pxx4hx7xgwn0gsaku25ws0df73rp
-    </div>
-  </div>
-
-  <!-- Bitcoin -->
-  <div style="margin: 15px 0;">
-    <a href="bitcoin:bc1q5pt7m2fk6w0dzsnf6vvd5k6nw5k44785286ujy">
-      <img src="https://img.shields.io/badge/Donate-BTC-F7931A?style=for-the-badge&logo=bitcoin&logoColor=white" alt="Donate BTC">
-    </a>
-    <div style="font-family: monospace; font-size: 13px; margin-top: 8px; word-break: break-all;">
-      bc1q5pt7m2fk6w0dzsnf6vvd5k6nw5k44785286ujy
-    </div>
-  </div>
-</div>
