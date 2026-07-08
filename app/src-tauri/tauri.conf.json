@@ -13,7 +13,7 @@
   },
   "productName": "Telegram Drive",
   "version": "1.8.8",
-  "identifier": "com.cameronamer.telegramdrive",
+  "identifier": "com.jagadeepmamidi.telegramdrive",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",

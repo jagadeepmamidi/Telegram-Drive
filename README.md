@@ -140,6 +140,26 @@ The Android app can be built locally from this repository with the Tauri Android
     npm run tauri build
     ```
 
+## Release signing (auto-updater)
+
+The desktop app checks this repository for updates. GitHub Actions signs release artifacts with a Tauri minisign keypair. You need **two repository secrets** before tagging a release (e.g. `v1.8.9`):
+
+| Secret | What it is | Where to get it |
+|--------|------------|-----------------|
+| `TAURI_SIGNING_PRIVATE_KEY` | Minisign **private** key (base64 text) | Generate on your machine: `cd app && npx tauri signer generate -w tauri-signing.key`. Paste the **entire contents** of `tauri-signing.key` into the secret. Never commit this file. |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for the key above | Leave **empty** if you pressed Enter with no password during `tauri signer generate`. Otherwise paste the password you chose. |
+
+The matching **public** key is already in the repo at `app/src-tauri/tauri-signing-key.key.pub` and embedded in `app/src-tauri/tauri.conf.json` under `plugins.updater.pubkey`. If you generate a **new** keypair, also run:
+
+```bash
+cp tauri-signing.key.pub app/src-tauri/tauri-signing-key.key.pub
+# then copy the single-line base64 pubkey into tauri.conf.json → plugins.updater.pubkey
+```
+
+Add secrets at: **GitHub repo → Settings → Secrets and variables → Actions → New repository secret**.
+
+After secrets are set, push a version tag (`git tag v1.8.9 && git push origin v1.8.9`) and the `.github/workflows/release.yml` workflow will build, sign, and publish installers to GitHub Releases.
+
 ##  Open Source & License
 
 This project is **Free and Open Source Software**. You are free to use, modify, and distribute it.

@@ -18,8 +18,8 @@ import { useFileUpload } from '../../hooks/useFileUpload';
 import { useFileDownload } from '../../hooks/useFileDownload';
 import { useFileOperations } from '../../hooks/useFileOperations';
 import { formatBytes, isMediaFile, isPdfFile, isImageFile, nativeShareOrCopy, copyToClipboard } from '../../utils';
-import { MediaPlayer } from '../desktop/dashboard/MediaPlayer';
-import { PdfViewer } from '../desktop/dashboard/PdfViewer';
+import { Suspense } from 'react';
+import { LazyMediaPlayer, LazyPdfViewer, PreviewLoadingFallback } from '../shared/LazyPreviews';
 import { PreviewModal } from '../desktop/dashboard/PreviewModal';
 import { useTheme } from '../../context/ThemeContext';
 import { TelegramFile, TelegramFolder, ShareInfo, BandwidthStats } from '../../types';
@@ -935,22 +935,26 @@ export default function MobileDashboard({ onLogout }: { onLogout?: () => void })
 
       {/* Previews Overlays (Media, PDF & Images) */}
       {playingFile && (
-        <div className="fixed inset-0 z-[100] bg-black/90">
-          <MediaPlayer
-            file={playingFile}
-            onClose={() => setPlayingFile(null)}
-            activeFolderId={activeFolderId}
-          />
-        </div>
+        <Suspense fallback={<PreviewLoadingFallback />}>
+          <div className="fixed inset-0 z-[100] bg-black/90">
+            <LazyMediaPlayer
+              file={playingFile}
+              onClose={() => setPlayingFile(null)}
+              activeFolderId={activeFolderId}
+            />
+          </div>
+        </Suspense>
       )}
       {pdfFile && (
-        <div className="fixed inset-0 z-[100] bg-telegram-bg">
-          <PdfViewer
-            file={pdfFile}
-            onClose={() => setPdfFile(null)}
-            activeFolderId={activeFolderId}
-          />
-        </div>
+        <Suspense fallback={<PreviewLoadingFallback />}>
+          <div className="fixed inset-0 z-[100] bg-telegram-bg">
+            <LazyPdfViewer
+              file={pdfFile}
+              onClose={() => setPdfFile(null)}
+              activeFolderId={activeFolderId}
+            />
+          </div>
+        </Suspense>
       )}
       {previewFile && (
         <PreviewModal

@@ -125,3 +125,27 @@ pub fn scan_video_tkhd_dimensions(buffer: &[u8]) -> (Option<u32>, Option<u32>) {
 
     (None, None)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_u32_be_parses_big_endian_values() {
+        assert_eq!(read_u32_be(&[0, 0, 1, 44], 0), Some(300));
+        assert_eq!(read_u32_be(&[0, 0, 0, 8], 0), Some(8));
+    }
+
+    #[test]
+    fn find_box_returns_end_offset_for_matching_fourcc() {
+        let data = [0, 0, 0, 8, b'm', b'o', b'o', b'v'];
+        assert_eq!(find_box(&data, 0, b"moov"), Some(8));
+        assert_eq!(find_box(&data, 0, b"trak"), None);
+    }
+
+    #[test]
+    fn box_size_at_reads_size_from_eight_byte_box() {
+        let data = [0, 0, 0, 8, b'm', b'o', b'o', b'v'];
+        assert_eq!(box_size_at(&data, 8), Some(8));
+    }
+}

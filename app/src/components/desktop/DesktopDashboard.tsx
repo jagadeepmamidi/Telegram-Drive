@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { invoke } from '@tauri-apps/api/core';
@@ -15,9 +15,8 @@ import { UploadQueue } from './dashboard/UploadQueue';
 import { DownloadQueue } from './dashboard/DownloadQueue';
 import { MoveToFolderModal } from './dashboard/MoveToFolderModal';
 import { PreviewModal } from './dashboard/PreviewModal';
-import { MediaPlayer } from './dashboard/MediaPlayer';
 import { ExternalDropBlocker } from './dashboard/ExternalDropBlocker';
-import { PdfViewer } from './dashboard/PdfViewer';
+import { LazyMediaPlayer, LazyPdfViewer, PreviewLoadingFallback } from '../shared/LazyPreviews';
 import { SettingsModal } from './dashboard/SettingsModal';
 import { ShareDialog } from './dashboard/ShareDialog';
 import { RenameFolderModal } from './dashboard/RenameFolderModal';
@@ -436,28 +435,30 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                     />
                 )}
                 {playingFile && (
-                    <MediaPlayer
-                        file={playingFile}
-                        onClose={() => setPlayingFile(null)}
-                        onNext={handleNextPreview}
-                        onPrev={handlePrevPreview}
-                        currentIndex={previewContextIndex}
-                        totalItems={previewContextFiles.length}
-                        activeFolderId={activeFolderId}
-                        key="media-player"
-                    />
+                    <Suspense fallback={<PreviewLoadingFallback />} key="media-player">
+                        <LazyMediaPlayer
+                            file={playingFile}
+                            onClose={() => setPlayingFile(null)}
+                            onNext={handleNextPreview}
+                            onPrev={handlePrevPreview}
+                            currentIndex={previewContextIndex}
+                            totalItems={previewContextFiles.length}
+                            activeFolderId={activeFolderId}
+                        />
+                    </Suspense>
                 )}
                 {pdfFile && (
-                    <PdfViewer
-                        file={pdfFile}
-                        onClose={() => setPdfFile(null)}
-                        onNext={handleNextPreview}
-                        onPrev={handlePrevPreview}
-                        currentIndex={previewContextIndex}
-                        totalItems={previewContextFiles.length}
-                        activeFolderId={activeFolderId}
-                        key="pdf-viewer"
-                    />
+                    <Suspense fallback={<PreviewLoadingFallback />} key="pdf-viewer">
+                        <LazyPdfViewer
+                            file={pdfFile}
+                            onClose={() => setPdfFile(null)}
+                            onNext={handleNextPreview}
+                            onPrev={handlePrevPreview}
+                            currentIndex={previewContextIndex}
+                            totalItems={previewContextFiles.length}
+                            activeFolderId={activeFolderId}
+                        />
+                    </Suspense>
                 )}
                 {showRemoteUpload && (
                     <RemoteUploadModal
