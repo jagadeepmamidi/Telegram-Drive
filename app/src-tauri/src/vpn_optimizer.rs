@@ -52,6 +52,13 @@ pub struct VpnConfig {
     pub chunk_size_kb: u32,            // 128, 256, 512
     pub keep_alive_interval_sec: u32,  // 0 = disabled, 30–120
     pub auto_detect_vpn: bool,
+    /// 0 = unlimited. Caps how large an archive the in-app viewer will download.
+    #[serde(default = "default_archive_max_bytes")]
+    pub archive_max_bytes: u64,
+}
+
+pub fn default_archive_max_bytes() -> u64 {
+    256 * 1024 * 1024
 }
 
 impl Default for VpnConfig {
@@ -74,6 +81,7 @@ impl Default for VpnConfig {
             chunk_size_kb: 512,
             keep_alive_interval_sec: 0,
             auto_detect_vpn: false,
+            archive_max_bytes: default_archive_max_bytes(),
         }
     }
 }
@@ -215,6 +223,17 @@ impl NetworkConfig {
     pub fn keep_alive_interval_sec(&self) -> u32 {
         let vpn = self.vpn.read().unwrap();
         if vpn.enabled { vpn.keep_alive_interval_sec } else { 0 }
+    }
+
+    /// Maximum archive size the in-app viewer will download. 0 = unlimited.
+    /// Defaults to 256 MiB when VPN mode is off.
+    pub fn archive_max_bytes(&self) -> u64 {
+        let vpn = self.vpn.read().unwrap();
+        if vpn.enabled {
+            vpn.archive_max_bytes
+        } else {
+            default_archive_max_bytes()
+        }
     }
 }
 

@@ -30,7 +30,8 @@ Telegram Drive leverages the Telegram API to allow you to upload, organize, and 
 *   **Thumbnail Previews**: Inline thumbnails for images and media files.
 *   **Folder Management**: Create "Folders" (private Telegram Channels) to organize content.
 *   **Shareable Links**: Generate direct download links with optional password protection and expiration, and revoke access anytime from the dashboard. Also supports copying native Telegram message links for files in public channels.
-*   **REST API for AI Integration**: Secure local API (off by default) with configurable port and API key auth. OpenAPI spec for seamless LLM and tool integration.
+*   **Archive Viewer**: Browse ZIP and 7z archives in-app and extract individual files back into Telegram Drive.
+*   **REST API for AI Integration**: Secure local API (off by default) with configurable port and API key auth. See `REST_API_Documentation.md` for file, folder, storage, and upload endpoints.
 *   **Proxy Support**: Native integration for SOCKS5 and MTProto proxies to bypass regional restrictions and secure your traffic.
 *   **VPN Optimizer**: Aggressive network tuning including bandwidth throttling, adjustable transfer chunk sizing, and adaptive keep-alives to ensure maximum stability on high-latency connections.
 *   **Privacy Focused**: API keys and data stay local. No third-party servers.

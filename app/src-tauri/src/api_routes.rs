@@ -1,8 +1,17 @@
-use actix_web::{get, post, web, HttpRequest, HttpResponse, Responder};
+use actix_web::{delete, get, patch, post, web, HttpRequest, HttpResponse, Responder};
+use actix_multipart::Multipart;
+use futures::{StreamExt, TryStreamExt};
+use tokio::io::AsyncWriteExt;
 use crate::commands::TelegramState;
-use crate::commands::utils::resolve_peer;
+use crate::commands::{create_folder_inner, delete_folder_inner, rename_folder_inner};
+use crate::commands::utils::{map_error, resolve_peer};
+use crate::models::FolderMetadata;
+use crate::vpn_optimizer::NetworkConfig;
 use grammers_client::types::{Media, Peer};
+use grammers_client::InputMessage;
+use grammers_tl_types as tl;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Shared state for the API server — holds the key hash for auth checks
@@ -659,6 +668,800 @@ async fn api_search_files(
     HttpResponse::Ok().json(matching_files)
 }
 
+fn peer_to_input_peer(peer: &Peer) -> Result<tl::enums::InputPeer, String> {
+    match peer {
+        Peer::User(u) => {
+            let (id, access_hash) = match &u.raw {
+                tl::enums::User::User(usr) => (usr.id, usr.access_hash.unwrap_or(0)),
+                tl::enums::User::Empty(usr) => (usr.id, 0),
+            };
+            Ok(tl::enums::InputPeer::User(tl::types::InputPeerUser {
+                user_id: id,
+                access_hash,
+            }))
+        }
+        Peer::Channel(c) => {
+            Ok(tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
+                channel_id: c.raw.id,
+                access_hash: c.raw.access_hash.ok_or("No access hash for channel")?,
+            }))
+        }
+        _ => Err("Unsupported peer type".to_string()),
+    }
+}
+
+fn td_folder_display_name(title: &str) -> String {
+    title
+        .replace(" [TD]", "")
+        .replace(" [td]", "")
+        .replace("[TD]", "")
+        .replace("[td]", "")
+        .trim()
+        .to_string()
+}
+
+#[delete("/api/v1/files/{message_id}")]
+async fn api_delete_file(
+    req: HttpRequest,
+    path: web::Path<i32>,
+    query: web::Query<FolderQuery>,
+    tg_state: web::Data<Arc<TelegramState>>,
+    api_state: web::Data<ApiState>,
+) -> impl Responder {
+    if let Err(e) = check_auth(&req, &api_state) {
+        return e;
+    }
+    let message_id = path.into_inner();
+    let folder_id = query.folder_id;
+
+    let client_opt = { tg_state.client.lock().await.clone() };
+    let client = match client_opt {
+        Some(c) => c,
+        None => return json_error("NOT_CONNECTED", "Telegram client is not connected", 503),
+    };
+
+    let peer = match resolve_peer(&client, folder_id, &tg_state.peer_cache).await {
+        Ok(p) => p,
+        Err(e) => return json_error("PEER_ERROR", &e, 400),
+    };
+
+    match client.delete_messages(&peer, &[message_id]).await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({ "success": true })),
+        Err(e) => json_error("DELETE_FAILED", &e.to_string(), 500),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct CopyRequest {
+    folder_id: Option<i64>,
+    source_folder_id: Option<i64>,
+}
+
+#[post("/api/v1/files/{message_id}/copy")]
+async fn api_copy_file(
+    req: HttpRequest,
+    path: web::Path<i32>,
+    body: web::Json<CopyRequest>,
+    tg_state: web::Data<Arc<TelegramState>>,
+    api_state: web::Data<ApiState>,
+) -> impl Responder {
+    if let Err(e) = check_auth(&req, &api_state) {
+        return e;
+    }
+    let message_id = path.into_inner();
+
+    let client_opt = { tg_state.client.lock().await.clone() };
+    let client = match client_opt {
+        Some(c) => c,
+        None => return json_error("NOT_CONNECTED", "Telegram client is not connected", 503),
+    };
+
+    let source_peer = match resolve_peer(&client, body.source_folder_id, &tg_state.peer_cache).await {
+        Ok(p) => p,
+        Err(e) => return json_error("SOURCE_PEER_ERROR", &e, 400),
+    };
+    let target_peer = match resolve_peer(&client, body.folder_id, &tg_state.peer_cache).await {
+        Ok(p) => p,
+        Err(e) => return json_error("TARGET_PEER_ERROR", &e, 400),
+    };
+
+    match client.forward_messages(&target_peer, &[message_id], &source_peer).await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({ "success": true })),
+        Err(e) => json_error("COPY_FAILED", &e.to_string(), 500),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct UpdateFileRequest {
+    name: Option<String>,
+    folder_id: Option<i64>,
+    source_folder_id: Option<i64>,
+}
+
+#[patch("/api/v1/files/{message_id}")]
+async fn api_update_file(
+    req: HttpRequest,
+    path: web::Path<i32>,
+    body: web::Json<UpdateFileRequest>,
+    tg_state: web::Data<Arc<TelegramState>>,
+    api_state: web::Data<ApiState>,
+) -> impl Responder {
+    if let Err(e) = check_auth(&req, &api_state) {
+        return e;
+    }
+    let message_id = path.into_inner();
+
+    let client_opt = { tg_state.client.lock().await.clone() };
+    let client = match client_opt {
+        Some(c) => c,
+        None => return json_error("NOT_CONNECTED", "Telegram client is not connected", 503),
+    };
+
+    if let Some(ref new_name) = body.name {
+        let rename_peer = match resolve_peer(&client, body.source_folder_id, &tg_state.peer_cache).await {
+            Ok(p) => p,
+            Err(e) => return json_error("PEER_ERROR", &e, 400),
+        };
+
+        let messages = match client.get_messages_by_id(&rename_peer, &[message_id]).await {
+            Ok(msgs) => msgs,
+            Err(e) => return json_error("FETCH_ERROR", &format!("Failed to fetch message for rename: {}", e), 500),
+        };
+        if messages.iter().flatten().next().is_none() {
+            return json_error(
+                "MESSAGE_NOT_FOUND",
+                &format!(
+                    "Message {} not found in folder {:?}. The file may have been moved or deleted. Please refresh.",
+                    message_id, body.source_folder_id
+                ),
+                404,
+            );
+        }
+
+        let input_peer = match peer_to_input_peer(&rename_peer) {
+            Ok(ip) => ip,
+            Err(e) => return json_error("PEER_CONVERT_ERROR", &e, 400),
+        };
+
+        if let Err(e) = client.invoke(&tl::functions::messages::EditMessage {
+            peer: input_peer,
+            id: message_id,
+            no_webpage: false,
+            invert_media: false,
+            message: Some(new_name.clone()),
+            media: None,
+            reply_markup: None,
+            entities: None,
+            schedule_date: None,
+            quick_reply_shortcut_id: None,
+            schedule_repeat_period: None,
+        }).await {
+            return json_error("RENAME_FAILED", &e.to_string(), 500);
+        }
+    }
+
+    if let Some(target_folder_id) = body.folder_id {
+        let source_folder_id = body.source_folder_id;
+        if source_folder_id != body.folder_id {
+            let source_peer = match resolve_peer(&client, source_folder_id, &tg_state.peer_cache).await {
+                Ok(p) => p,
+                Err(e) => return json_error("SOURCE_PEER_ERROR", &e, 400),
+            };
+            let target_peer = match resolve_peer(&client, Some(target_folder_id), &tg_state.peer_cache).await {
+                Ok(p) => p,
+                Err(e) => return json_error("TARGET_PEER_ERROR", &e, 400),
+            };
+
+            if let Err(e) = client.forward_messages(&target_peer, &[message_id], &source_peer).await {
+                return json_error("MOVE_FORWARD_FAILED", &e.to_string(), 500);
+            }
+            if let Err(e) = client.delete_messages(&source_peer, &[message_id]).await {
+                return json_error("MOVE_DELETE_FAILED", &e.to_string(), 500);
+            }
+        }
+    }
+
+    HttpResponse::Ok().json(serde_json::json!({ "success": true }))
+}
+
+#[post("/api/v1/files")]
+async fn api_upload_file(
+    req: HttpRequest,
+    mut payload: Multipart,
+    tg_state: web::Data<Arc<TelegramState>>,
+    api_state: web::Data<ApiState>,
+    net_config: web::Data<Arc<NetworkConfig>>,
+) -> impl Responder {
+    if let Err(e) = check_auth(&req, &api_state) {
+        return e;
+    }
+
+    let client_opt = { tg_state.client.lock().await.clone() };
+    let client = match client_opt {
+        Some(c) => c,
+        None => return json_error("NOT_CONNECTED", "Telegram client is not connected", 503),
+    };
+
+    let temp_path = std::env::temp_dir().join(format!("upload_{}_{}", rand::random::<u32>(), rand::random::<u32>()));
+    let mut file = match tokio::fs::File::create(&temp_path).await {
+        Ok(f) => f,
+        Err(e) => return json_error("TEMP_FILE_CREATE_FAILED", &e.to_string(), 500),
+    };
+
+    let mut folder_id: Option<i64> = None;
+    let mut filename = "file".to_string();
+    let mut field_mime: Option<String> = None;
+
+    while let Ok(Some(mut field)) = payload.try_next().await {
+        let content_disposition = field.content_disposition();
+        let name = content_disposition.and_then(|cd| cd.get_name()).unwrap_or("");
+
+        if name == "file" {
+            if let Some(fname) = content_disposition.and_then(|cd| cd.get_filename()) {
+                filename = fname.to_string();
+            }
+            field_mime = field.content_type().map(|m| m.to_string());
+            while let Some(chunk) = field.next().await {
+                let data = match chunk {
+                    Ok(d) => d,
+                    Err(e) => {
+                        let _ = tokio::fs::remove_file(&temp_path).await;
+                        return json_error("READ_ERROR", &e.to_string(), 400);
+                    }
+                };
+                if let Err(e) = file.write_all(&data).await {
+                    let _ = tokio::fs::remove_file(&temp_path).await;
+                    return json_error("WRITE_ERROR", &e.to_string(), 500);
+                }
+            }
+        } else if name == "folder_id" {
+            let mut bytes = Vec::new();
+            while let Some(chunk) = field.next().await {
+                let data = match chunk {
+                    Ok(d) => d,
+                    Err(e) => {
+                        let _ = tokio::fs::remove_file(&temp_path).await;
+                        return json_error("READ_ERROR", &e.to_string(), 400);
+                    }
+                };
+                bytes.extend_from_slice(&data);
+            }
+            let val_str = String::from_utf8_lossy(&bytes).trim().to_string();
+            if !val_str.is_empty() && val_str != "null" && val_str != "none" {
+                if let Ok(id) = val_str.parse::<i64>() {
+                    folder_id = Some(id);
+                }
+            }
+        }
+    }
+
+    if let Err(e) = file.flush().await {
+        let _ = tokio::fs::remove_file(&temp_path).await;
+        return json_error("WRITE_ERROR", &e.to_string(), 500);
+    }
+    drop(file);
+
+    let file_size = match tokio::fs::metadata(&temp_path).await {
+        Ok(m) => m.len(),
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return json_error("METADATA_ERROR", &e.to_string(), 500);
+        }
+    };
+
+    let peer = match resolve_peer(&client, folder_id, &tg_state.peer_cache).await {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return json_error("PEER_ERROR", &e, 400);
+        }
+    };
+
+    let mut open_file = match tokio::fs::File::open(&temp_path).await {
+        Ok(f) => f,
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return json_error("OPEN_ERROR", &e.to_string(), 500);
+        }
+    };
+
+    let upload_res = client.upload_stream(&mut open_file, file_size as usize, filename.clone()).await;
+    let uploaded_file = match upload_res {
+        Ok(uf) => uf,
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return json_error("UPLOAD_FAILED", &map_error(e), 500);
+        }
+    };
+
+    let message = InputMessage::new().text("").file(uploaded_file);
+
+    let max_retries = net_config.retry_attempts();
+    let base_ms = net_config.retry_base_backoff_ms();
+    let max_ms = net_config.retry_max_backoff_ms();
+    let respect_flood = net_config.should_respect_flood_wait();
+    let mut last_err = String::new();
+    let mut sent_msg = None;
+
+    for attempt in 0..=max_retries {
+        match client.send_message(&peer, message.clone()).await {
+            Ok(msg) => {
+                sent_msg = Some(msg);
+                break;
+            }
+            Err(e) => {
+                let err = map_error(e);
+                log::warn!("send_message attempt {}/{}: {}", attempt + 1, max_retries + 1, err);
+
+                if respect_flood && err.starts_with("FLOOD_WAIT_") {
+                    if let Ok(secs) = err.trim_start_matches("FLOOD_WAIT_").parse::<u64>() {
+                        let wait = secs.min(300);
+                        log::info!("Respecting FLOOD_WAIT: sleeping {}s", wait);
+                        tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+                        last_err = err;
+                        continue;
+                    }
+                }
+
+                if attempt < max_retries {
+                    let wait = crate::vpn_optimizer::backoff_ms(attempt, base_ms, max_ms);
+                    tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+                }
+                last_err = err;
+            }
+        }
+    }
+
+    let _ = tokio::fs::remove_file(&temp_path).await;
+
+    let msg = match sent_msg {
+        Some(m) => m,
+        None => return json_error("SEND_MESSAGE_FAILED", &last_err, 500),
+    };
+
+    HttpResponse::Ok().json(ApiFile {
+        id: msg.id() as i64,
+        folder_id,
+        name: filename,
+        size: file_size,
+        mime_type: field_mime,
+        created_at: msg.date().to_string(),
+    })
+}
+
+#[get("/api/v1/folders")]
+async fn api_list_folders(
+    req: HttpRequest,
+    tg_state: web::Data<Arc<TelegramState>>,
+    api_state: web::Data<ApiState>,
+) -> impl Responder {
+    if let Err(e) = check_auth(&req, &api_state) {
+        return e;
+    }
+
+    let client_opt = { tg_state.client.lock().await.clone() };
+    let client = match client_opt {
+        Some(c) => c,
+        None => return json_error("NOT_CONNECTED", "Telegram client is not connected", 503),
+    };
+
+    let mut folders = Vec::new();
+    let mut dialogs = client.iter_dialogs();
+    let mut discovered = HashMap::new();
+
+    while let Some(dialog) = dialogs.next().await.ok().flatten() {
+        if let Peer::Channel(ref c) = dialog.peer {
+            let id = c.raw.id;
+            discovered.insert(id, dialog.peer.clone());
+            let name = c.raw.title.clone();
+            if name.to_lowercase().contains("[td]") {
+                let username = c.raw.username.clone();
+                let is_public = username.is_some();
+                folders.push(FolderMetadata {
+                    id,
+                    name: td_folder_display_name(&name),
+                    parent_id: None,
+                    username,
+                    is_public,
+                });
+            }
+        }
+    }
+
+    {
+        let mut cache = tg_state.peer_cache.write().await;
+        cache.extend(discovered);
+    }
+
+    HttpResponse::Ok().json(folders)
+}
+
+#[derive(serde::Deserialize)]
+struct CreateFolderRequest {
+    name: String,
+}
+
+#[post("/api/v1/folders")]
+async fn api_create_folder(
+    req: HttpRequest,
+    body: web::Json<CreateFolderRequest>,
+    tg_state: web::Data<Arc<TelegramState>>,
+    api_state: web::Data<ApiState>,
+) -> impl Responder {
+    if let Err(e) = check_auth(&req, &api_state) {
+        return e;
+    }
+
+    let client_opt = { tg_state.client.lock().await.clone() };
+    let client = match client_opt {
+        Some(c) => c,
+        None => return json_error("NOT_CONNECTED", "Telegram client is not connected", 503),
+    };
+
+    match create_folder_inner(body.name.clone(), &client, &tg_state.peer_cache).await {
+        Ok(folder) => HttpResponse::Ok().json(folder),
+        Err(e) => json_error("CREATE_FOLDER_FAILED", &e, 500),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct RenameFolderRequest {
+    name: String,
+}
+
+#[patch("/api/v1/folders/{folder_id}")]
+async fn api_rename_folder(
+    req: HttpRequest,
+    path: web::Path<i64>,
+    body: web::Json<RenameFolderRequest>,
+    tg_state: web::Data<Arc<TelegramState>>,
+    api_state: web::Data<ApiState>,
+) -> impl Responder {
+    if let Err(e) = check_auth(&req, &api_state) {
+        return e;
+    }
+    let folder_id = path.into_inner();
+
+    let client_opt = { tg_state.client.lock().await.clone() };
+    let client = match client_opt {
+        Some(c) => c,
+        None => return json_error("NOT_CONNECTED", "Telegram client is not connected", 503),
+    };
+
+    match rename_folder_inner(folder_id, &body.name, &client, &tg_state.peer_cache).await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({ "success": true })),
+        Err(e) => json_error("RENAME_FOLDER_FAILED", &e, 500),
+    }
+}
+
+#[delete("/api/v1/folders/{folder_id}")]
+async fn api_delete_folder(
+    req: HttpRequest,
+    path: web::Path<i64>,
+    tg_state: web::Data<Arc<TelegramState>>,
+    api_state: web::Data<ApiState>,
+) -> impl Responder {
+    if let Err(e) = check_auth(&req, &api_state) {
+        return e;
+    }
+    let folder_id = path.into_inner();
+
+    let client_opt = { tg_state.client.lock().await.clone() };
+    let client = match client_opt {
+        Some(c) => c,
+        None => return json_error("NOT_CONNECTED", "Telegram client is not connected", 503),
+    };
+
+    match delete_folder_inner(folder_id, &client, &tg_state.peer_cache).await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({ "success": true })),
+        Err(e) => json_error("DELETE_FOLDER_FAILED", &e, 500),
+    }
+}
+
+#[derive(Serialize)]
+struct FolderStat {
+    id: Option<i64>,
+    name: String,
+    file_count: usize,
+    size_bytes: u64,
+}
+
+#[derive(Serialize)]
+struct MimeStat {
+    mime_type: String,
+    file_count: usize,
+    size_bytes: u64,
+}
+
+#[derive(Serialize)]
+struct StorageStatsResponse {
+    total_storage_used_bytes: u64,
+    total_file_count: usize,
+    folders: Vec<FolderStat>,
+    mime_types: Vec<MimeStat>,
+}
+
+#[get("/api/v1/storage/stats")]
+async fn api_storage_stats(
+    req: HttpRequest,
+    tg_state: web::Data<Arc<TelegramState>>,
+    api_state: web::Data<ApiState>,
+) -> impl Responder {
+    if let Err(e) = check_auth(&req, &api_state) {
+        return e;
+    }
+
+    let client_opt = { tg_state.client.lock().await.clone() };
+    let client = match client_opt {
+        Some(c) => c,
+        None => return json_error("NOT_CONNECTED", "Telegram client is not connected", 503),
+    };
+
+    let mut peers_to_scan = Vec::new();
+    if let Ok(me_peer) = resolve_peer(&client, None, &tg_state.peer_cache).await {
+        peers_to_scan.push((None, "Saved Messages".to_string(), me_peer));
+    }
+    let mut dialogs = client.iter_dialogs();
+    while let Some(dialog) = dialogs.next().await.ok().flatten() {
+        if let Peer::Channel(ref c) = dialog.peer {
+            let name = c.raw.title.clone();
+            if name.to_lowercase().contains("[td]") {
+                peers_to_scan.push((Some(c.raw.id), td_folder_display_name(&name), dialog.peer.clone()));
+            }
+        }
+    }
+
+    let mut total_storage_used_bytes: u64 = 0;
+    let mut total_file_count: usize = 0;
+    let mut folder_stats = Vec::new();
+    let mut mime_map: HashMap<String, (usize, u64)> = HashMap::new();
+
+    for (fid, folder_name, peer) in peers_to_scan {
+        let mut file_count = 0;
+        let mut size_bytes = 0;
+        let mut msgs = client.iter_messages(peer).limit(200);
+        while let Some(msg) = msgs.next().await.ok().flatten() {
+            if let Some(doc) = msg.media() {
+                let (size, mime) = match doc {
+                    Media::Document(d) => (d.size() as u64, d.mime_type().unwrap_or("application/octet-stream").to_string()),
+                    Media::Photo(_) => (0, "image/jpeg".to_string()),
+                    _ => continue,
+                };
+                file_count += 1;
+                size_bytes += size;
+
+                let mime_entry = mime_map.entry(mime).or_insert((0, 0));
+                mime_entry.0 += 1;
+                mime_entry.1 += size;
+            }
+        }
+
+        total_storage_used_bytes += size_bytes;
+        total_file_count += file_count;
+
+        folder_stats.push(FolderStat {
+            id: fid,
+            name: folder_name,
+            file_count,
+            size_bytes,
+        });
+    }
+
+    let mime_types = mime_map.into_iter().map(|(mime_type, (file_count, size_bytes))| MimeStat {
+        mime_type,
+        file_count,
+        size_bytes,
+    }).collect();
+
+    HttpResponse::Ok().json(StorageStatsResponse {
+        total_storage_used_bytes,
+        total_file_count,
+        folders: folder_stats,
+        mime_types,
+    })
+}
+
+#[derive(Serialize)]
+struct DuplicateGroup {
+    name: String,
+    size: u64,
+    files: Vec<ApiFile>,
+}
+
+#[get("/api/v1/storage/duplicates")]
+async fn api_storage_duplicates(
+    req: HttpRequest,
+    tg_state: web::Data<Arc<TelegramState>>,
+    api_state: web::Data<ApiState>,
+) -> impl Responder {
+    if let Err(e) = check_auth(&req, &api_state) {
+        return e;
+    }
+
+    let client_opt = { tg_state.client.lock().await.clone() };
+    let client = match client_opt {
+        Some(c) => c,
+        None => return json_error("NOT_CONNECTED", "Telegram client is not connected", 503),
+    };
+
+    let mut peers_to_scan = Vec::new();
+    if let Ok(me_peer) = resolve_peer(&client, None, &tg_state.peer_cache).await {
+        peers_to_scan.push((None, me_peer));
+    }
+    let mut dialogs = client.iter_dialogs();
+    while let Some(dialog) = dialogs.next().await.ok().flatten() {
+        if let Peer::Channel(ref c) = dialog.peer {
+            let name = c.raw.title.clone();
+            if name.to_lowercase().contains("[td]") {
+                peers_to_scan.push((Some(c.raw.id), dialog.peer.clone()));
+            }
+        }
+    }
+
+    let mut file_groups: HashMap<(String, u64), Vec<ApiFile>> = HashMap::new();
+
+    for (fid, peer) in peers_to_scan {
+        let mut msgs = client.iter_messages(peer).limit(200);
+        while let Some(msg) = msgs.next().await.ok().flatten() {
+            if let Some(doc) = msg.media() {
+                let (name, size, mime) = match doc {
+                    Media::Document(d) => (d.name().to_string(), d.size() as u64, d.mime_type().map(|s| s.to_string())),
+                    Media::Photo(_) => ("Photo.jpg".to_string(), 0, Some("image/jpeg".into())),
+                    _ => continue,
+                };
+
+                file_groups.entry((name.clone(), size)).or_default().push(ApiFile {
+                    id: msg.id() as i64,
+                    folder_id: fid,
+                    name,
+                    size,
+                    mime_type: mime,
+                    created_at: msg.date().to_string(),
+                });
+            }
+        }
+    }
+
+    let duplicates: Vec<DuplicateGroup> = file_groups
+        .into_iter()
+        .filter(|(_, files)| files.len() > 1)
+        .map(|((name, size), files)| DuplicateGroup { name, size, files })
+        .collect();
+
+    HttpResponse::Ok().json(duplicates)
+}
+
+#[get("/api/v1/folders/empty")]
+async fn api_empty_folders(
+    req: HttpRequest,
+    tg_state: web::Data<Arc<TelegramState>>,
+    api_state: web::Data<ApiState>,
+) -> impl Responder {
+    if let Err(e) = check_auth(&req, &api_state) {
+        return e;
+    }
+
+    let client_opt = { tg_state.client.lock().await.clone() };
+    let client = match client_opt {
+        Some(c) => c,
+        None => return json_error("NOT_CONNECTED", "Telegram client is not connected", 503),
+    };
+
+    let mut folders_to_check = Vec::new();
+    let mut dialogs = client.iter_dialogs();
+    while let Some(dialog) = dialogs.next().await.ok().flatten() {
+        if let Peer::Channel(ref c) = dialog.peer {
+            let name = c.raw.title.clone();
+            if name.to_lowercase().contains("[td]") {
+                folders_to_check.push((c.raw.id, td_folder_display_name(&name), dialog.peer.clone()));
+            }
+        }
+    }
+
+    let mut empty_folders = Vec::new();
+
+    for (fid, display_name, peer) in folders_to_check {
+        let mut msgs = client.iter_messages(peer).limit(1);
+        let mut is_empty = true;
+        if let Some(msg) = msgs.next().await.ok().flatten() {
+            if msg.media().is_some() {
+                is_empty = false;
+            }
+        }
+        if is_empty {
+            empty_folders.push(FolderMetadata {
+                id: fid,
+                name: display_name,
+                parent_id: None,
+                username: None,
+                is_public: false,
+            });
+        }
+    }
+
+    HttpResponse::Ok().json(empty_folders)
+}
+
+#[derive(Serialize)]
+struct MediaInfoResponse {
+    duration_secs: Option<f64>,
+    width: Option<i32>,
+    height: Option<i32>,
+    audio_title: Option<String>,
+    audio_performer: Option<String>,
+}
+
+#[get("/api/v1/files/{message_id}/media-info")]
+async fn api_media_info(
+    req: HttpRequest,
+    path: web::Path<i32>,
+    query: web::Query<FolderQuery>,
+    tg_state: web::Data<Arc<TelegramState>>,
+    api_state: web::Data<ApiState>,
+) -> impl Responder {
+    if let Err(e) = check_auth(&req, &api_state) {
+        return e;
+    }
+    let message_id = path.into_inner();
+    let folder_id = query.folder_id;
+
+    let client_opt = { tg_state.client.lock().await.clone() };
+    let client = match client_opt {
+        Some(c) => c,
+        None => return json_error("NOT_CONNECTED", "Telegram client is not connected", 503),
+    };
+
+    let peer = match resolve_peer(&client, folder_id, &tg_state.peer_cache).await {
+        Ok(p) => p,
+        Err(e) => return json_error("PEER_ERROR", &e, 400),
+    };
+
+    let messages = match client.get_messages_by_id(&peer, &[message_id]).await {
+        Ok(msgs) => msgs,
+        Err(e) => return json_error("GET_MESSAGE_ERROR", &e.to_string(), 500),
+    };
+
+    let msg = match messages.into_iter().flatten().next() {
+        Some(m) => m,
+        None => return json_error("NOT_FOUND", "File message not found", 404),
+    };
+
+    let media = match msg.media() {
+        Some(m) => m,
+        None => return json_error("NO_MEDIA", "Message has no media", 400),
+    };
+
+    let mut info = MediaInfoResponse {
+        duration_secs: None,
+        width: None,
+        height: None,
+        audio_title: None,
+        audio_performer: None,
+    };
+
+    if let Media::Document(d) = media {
+        if let Some(tl::enums::Document::Document(doc)) = &d.raw.document {
+            for attr in &doc.attributes {
+                match attr {
+                    tl::enums::DocumentAttribute::Video(v) => {
+                        info.duration_secs = Some(v.duration);
+                        info.width = Some(v.w);
+                        info.height = Some(v.h);
+                    }
+                    tl::enums::DocumentAttribute::Audio(a) => {
+                        info.duration_secs = Some(a.duration as f64);
+                        info.audio_title = a.title.clone();
+                        info.audio_performer = a.performer.clone();
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    HttpResponse::Ok().json(info)
+}
+
 /// Register all API routes on the Actix App
 pub fn configure_api(cfg: &mut web::ServiceConfig) {
     cfg.service(api_health)
@@ -666,5 +1469,17 @@ pub fn configure_api(cfg: &mut web::ServiceConfig) {
        .service(api_get_file)
        .service(api_download_file)
        .service(api_bulk_files)
-       .service(api_search_files);
+       .service(api_search_files)
+       .service(api_delete_file)
+       .service(api_copy_file)
+       .service(api_update_file)
+       .service(api_upload_file)
+       .service(api_list_folders)
+       .service(api_create_folder)
+       .service(api_rename_folder)
+       .service(api_delete_folder)
+       .service(api_storage_stats)
+       .service(api_storage_duplicates)
+       .service(api_empty_folders)
+       .service(api_media_info);
 }

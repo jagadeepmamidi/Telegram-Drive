@@ -93,6 +93,12 @@ pub async fn cmd_apply_vpn_settings(
         chunk_size_kb: req.chunk_size_kb.clamp(64, 512),
         keep_alive_interval_sec: if req.keep_alive_interval_sec == 0 { 0 } else { req.keep_alive_interval_sec.clamp(30, 120) },
         auto_detect_vpn: req.auto_detect_vpn,
+        archive_max_bytes: net_config
+            .vpn
+            .read()
+            .ok()
+            .map(|vpn| vpn.archive_max_bytes)
+            .unwrap_or_else(crate::vpn_optimizer::default_archive_max_bytes),
     };
 
     log::info!(

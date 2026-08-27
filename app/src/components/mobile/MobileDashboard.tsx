@@ -17,9 +17,9 @@ import { useTelegramConnection } from '../../hooks/useTelegramConnection';
 import { useFileUpload } from '../../hooks/useFileUpload';
 import { useFileDownload } from '../../hooks/useFileDownload';
 import { useFileOperations } from '../../hooks/useFileOperations';
-import { formatBytes, isMediaFile, isPdfFile, isImageFile, nativeShareOrCopy, copyToClipboard } from '../../utils';
+import { formatBytes, isMediaFile, isPdfFile, isImageFile, isArchiveFile, nativeShareOrCopy, copyToClipboard } from '../../utils';
 import { Suspense } from 'react';
-import { LazyMediaPlayer, LazyPdfViewer, PreviewLoadingFallback } from '../shared/LazyPreviews';
+import { LazyMediaPlayer, LazyPdfViewer, LazyArchiveViewer, PreviewLoadingFallback } from '../shared/LazyPreviews';
 import { PreviewModal } from '../desktop/dashboard/PreviewModal';
 import { useTheme } from '../../context/ThemeContext';
 import { TelegramFile, TelegramFolder, ShareInfo, BandwidthStats } from '../../types';
@@ -124,6 +124,7 @@ export default function MobileDashboard({ onLogout }: { onLogout?: () => void })
 
   const [playingFile, setPlayingFile] = useState<TelegramFile | null>(null);
   const [pdfFile, setPdfFile] = useState<TelegramFile | null>(null);
+  const [archiveViewFile, setArchiveViewFile] = useState<TelegramFile | null>(null);
   const [previewFile, setPreviewFile] = useState<TelegramFile | null>(null);
   const [shareFile, setShareFile] = useState<TelegramFile | null>(null);
   const [bulkShareLinks, setBulkShareLinks] = useState<Array<{ file: TelegramFile; link: string }> | null>(null);
@@ -323,6 +324,8 @@ export default function MobileDashboard({ onLogout }: { onLogout?: () => void })
       setPlayingFile(file);
     } else if (isPdfFile(file.name)) {
       setPdfFile(file);
+    } else if (isArchiveFile(file.name)) {
+      setArchiveViewFile(file);
     } else if (isImageFile(file.name)) {
       setPreviewFile(file);
     } else {
@@ -954,6 +957,16 @@ export default function MobileDashboard({ onLogout }: { onLogout?: () => void })
               activeFolderId={activeFolderId}
             />
           </div>
+        </Suspense>
+      )}
+      {archiveViewFile && (
+        <Suspense fallback={<PreviewLoadingFallback />}>
+          <LazyArchiveViewer
+            file={archiveViewFile}
+            activeFolderId={activeFolderId}
+            folders={folders}
+            onClose={() => setArchiveViewFile(null)}
+          />
         </Suspense>
       )}
       {previewFile && (

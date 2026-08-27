@@ -24,6 +24,13 @@ export interface FolderInviteInfo {
     username?: string;
 }
 
+export interface ArchiveEntry {
+    filename: string;
+    size: number;
+    compressed_size: number;
+    is_dir: boolean;
+}
+
 export interface QueueItem {
     id: string;
     path: string;

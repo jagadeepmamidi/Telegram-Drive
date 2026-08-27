@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Eye, HardDrive, Trash2, FolderOpen, Pencil, Play, FileText, Link, Copy } from 'lucide-react';
+import { Eye, HardDrive, Trash2, FolderOpen, Pencil, Play, FileText, Link, Copy, Archive } from 'lucide-react';
 import { TelegramFile, TelegramFolder } from '../../../types';
-import { isMediaFile, isPdfFile } from '../../../utils';
+import { isMediaFile, isPdfFile, isArchiveFile } from '../../../utils';
 import { toast } from 'sonner';
 
 interface ContextMenuProps {
@@ -78,6 +78,11 @@ export function ContextMenu({ x, y, file, onClose, onDownload, onDelete, onPrevi
                         <>
                             <FileText className="w-4 h-4 text-red-400" />
                             View PDF
+                        </>
+                    ) : isArchiveFile(file.name) ? (
+                        <>
+                            <Archive className="w-4 h-4 text-yellow-400" />
+                            Browse Archive
                         </>
                     ) : (
                         <>

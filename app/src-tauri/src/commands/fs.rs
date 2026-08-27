@@ -465,8 +465,16 @@ pub async fn cmd_create_folder(
         });
     }
     let client = client_opt.ok_or_else(|| "Client not connected".to_string())?;
+    create_folder_inner(name, &client, &state.peer_cache).await
+}
+
+pub async fn create_folder_inner(
+    name: String,
+    client: &grammers_client::Client,
+    peer_cache: &std::sync::Arc<tokio::sync::RwLock<HashMap<i64, Peer>>>,
+) -> Result<FolderMetadata, String> {
     log::info!("Creating Telegram Channel: {}", name);
-    
+
     let result = client.invoke(&tl::functions::channels::CreateChannel {
         broadcast: true,
         megagroup: false,
@@ -478,33 +486,25 @@ pub async fn cmd_create_folder(
         forum: false,
         ttl_period: None, // Initial creation TTL
     }).await.map_err(map_error)?;
-    
+
     let (chat_id, access_hash) = match &result {
         tl::enums::Updates::Updates(u) => {
              let chat = u.chats.first().ok_or("No chat in updates")?;
              match chat {
                  tl::enums::Chat::Channel(c) => {
-                     // Cache the newly created peer immediately so that invite link generation
-                     // and other commands don't experience a peer cache miss on warm start.
                      let channel_obj = grammers_client::types::Channel { raw: c.clone() };
-                     state.peer_cache.write().await.insert(c.id, grammers_client::types::Peer::Channel(channel_obj));
+                     peer_cache.write().await.insert(c.id, grammers_client::types::Peer::Channel(channel_obj));
                      (c.id, c.access_hash.unwrap_or(0))
                  }
                  _ => return Err("Created chat is not a channel".to_string()),
              }
         },
-        _ => return Err("Unexpected response (not Updates::Updates)".to_string()), 
+        _ => return Err("Unexpected response (not Updates::Updates)".to_string()),
     };
-
-    // Explicitly Disable TTL
-    let _input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
-         channel_id: chat_id,
-         access_hash,
-    });
 
     let _ = client.invoke(&tl::functions::messages::SetHistoryTtl {
         peer: tl::enums::InputPeer::Channel(tl::types::InputPeerChannel { channel_id: chat_id, access_hash }),
-        period: 0, 
+        period: 0,
     }).await;
 
     Ok(FolderMetadata {
@@ -531,10 +531,18 @@ pub async fn cmd_delete_folder(
         return Ok(true);
     }
     let client = client_opt.ok_or_else(|| "Client not connected".to_string())?;
+    delete_folder_inner(folder_id, &client, &state.peer_cache).await
+}
+
+pub async fn delete_folder_inner(
+    folder_id: i64,
+    client: &grammers_client::Client,
+    peer_cache: &std::sync::Arc<tokio::sync::RwLock<HashMap<i64, Peer>>>,
+) -> Result<bool, String> {
     log::info!("Deleting folder/channel: {}", folder_id);
 
-    let peer = resolve_peer(&client, Some(folder_id), &state.peer_cache).await?;
-    
+    let peer = resolve_peer(client, Some(folder_id), peer_cache).await?;
+
     let input_channel = match peer {
         Peer::Channel(c) => {
              let chan = &c.raw;
@@ -545,11 +553,11 @@ pub async fn cmd_delete_folder(
         },
         _ => return Err("Only channels (folders) can be deleted.".to_string()),
     };
-    
+
     client.invoke(&tl::functions::channels::DeleteChannel {
         channel: input_channel,
     }).await.map_err(|e| format!("Failed to delete channel: {}", e))?;
-    
+
     Ok(true)
 }
 
@@ -569,10 +577,19 @@ pub async fn cmd_rename_folder(
         return Ok(true);
     }
     let client = client_opt.ok_or_else(|| "Client not connected".to_string())?;
+    rename_folder_inner(folder_id, &new_name, &client, &state.peer_cache).await
+}
+
+pub async fn rename_folder_inner(
+    folder_id: i64,
+    new_name: &str,
+    client: &grammers_client::Client,
+    peer_cache: &std::sync::Arc<tokio::sync::RwLock<HashMap<i64, Peer>>>,
+) -> Result<bool, String> {
     log::info!("Renaming folder/channel: {} to {}", folder_id, new_name);
 
-    let peer = resolve_peer(&client, Some(folder_id), &state.peer_cache).await?;
-    
+    let peer = resolve_peer(client, Some(folder_id), peer_cache).await?;
+
     let input_channel = match peer {
         Peer::Channel(c) => {
              let chan = &c.raw;
@@ -583,12 +600,12 @@ pub async fn cmd_rename_folder(
         },
         _ => return Err("Only channels (folders) can be renamed.".to_string()),
     };
-    
+
     client.invoke(&tl::functions::channels::EditTitle {
         channel: input_channel,
         title: format!("{} [TD]", new_name),
     }).await.map_err(|e| format!("Failed to rename channel: {}", e))?;
-    
+
     Ok(true)
 }
 

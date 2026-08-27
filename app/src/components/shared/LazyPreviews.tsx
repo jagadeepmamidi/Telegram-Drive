@@ -8,6 +8,10 @@ export const LazyPdfViewer = React.lazy(() =>
   import('../desktop/dashboard/PdfViewer').then((m) => ({ default: m.PdfViewer }))
 );
 
+export const LazyArchiveViewer = React.lazy(() =>
+  import('../desktop/dashboard/ArchiveViewerModal').then((m) => ({ default: m.ArchiveViewerModal }))
+);
+
 export function PreviewLoadingFallback() {
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90">

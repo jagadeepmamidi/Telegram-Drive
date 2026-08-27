@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.8.9] - 2026-08-27
+
+### Features
+
+- **Archive viewer** — Browse ZIP and 7z files in the desktop and Android apps. Extract a single entry or the whole archive back into Saved Messages or any Telegram Drive folder. RAR files open the viewer with a clear unsupported-format error (the unrar C++ crate is not bundled, to keep the MIT build portable).
+- **REST API expansion** — Added folder CRUD, file upload/copy/rename/move/delete, storage stats, duplicate detection, empty-folder listing, and media-info. The local API remains off by default and loopback-only.
+
+### Hygiene
+
+- Removed leftover ad-network script/frame hosts from the Content Security Policy.
+- Corrected `AGENTS.md` (ads were already removed) and dropped the README claim of an OpenAPI spec.
+
+---
+
 ## [1.8.8] - 2026-06-12
 
 ### Features & Caching Polish

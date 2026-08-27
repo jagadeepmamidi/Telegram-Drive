@@ -4,8 +4,12 @@ import {
   isAudioFile,
   isImageFile,
   isMediaFile,
+  isArchiveFile,
   isPdfFile,
+  isRarFile,
+  isSevenZFile,
   isVideoFile,
+  isZipFile,
   sanitizeFilename,
 } from './utils';
 
@@ -27,6 +31,11 @@ describe('file type helpers', () => {
     expect(isImageFile('photo.webp')).toBe(true);
     expect(isPdfFile('notes.pdf')).toBe(true);
     expect(isVideoFile('readme.txt')).toBe(false);
+    expect(isZipFile('backup.ZIP')).toBe(true);
+    expect(isRarFile('photos.rar')).toBe(true);
+    expect(isSevenZFile('docs.7z')).toBe(true);
+    expect(isArchiveFile('docs.7z')).toBe(true);
+    expect(isArchiveFile('notes.pdf')).toBe(false);
   });
 });
 

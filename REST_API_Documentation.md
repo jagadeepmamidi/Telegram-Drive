@@ -45,7 +45,7 @@ curl http://localhost:8550/api/v1/health
 ```json
 {
   "status": "ok",
-  "version": "1.8.4"
+  "version": "1.8.9"
 }
 ```
 
@@ -279,3 +279,48 @@ The API returns standardized JSON error formats on failure:
   }
 }
 ```
+
+---
+
+## Additional endpoints (v1.8.9)
+
+These routes use the same `X-API-Key` auth as the rest of `/api/v1`. `folder_id` omitted means Saved Messages.
+
+### Upload a file
+* **URL:** `POST /files`
+* **Content-Type:** `multipart/form-data`
+* **Fields:** `file` (required), `folder_id` (optional)
+
+```bash
+curl -H "X-API-Key: YOUR_API_KEY" \
+  -F "file=@./report.pdf" \
+  -F "folder_id=111" \
+  http://localhost:8550/api/v1/files
+```
+
+### Delete a file
+* **URL:** `DELETE /files/{message_id}?folder_id=`
+
+### Copy a file
+* **URL:** `POST /files/{message_id}/copy`
+```json
+{ "source_folder_id": 111, "folder_id": 222 }
+```
+
+### Rename or move a file
+* **URL:** `PATCH /files/{message_id}`
+```json
+{ "name": "renamed.pdf", "source_folder_id": 111, "folder_id": 222 }
+```
+
+### Folders
+* `GET /folders` — list Telegram Drive folders
+* `POST /folders` — `{ "name": "Projects" }`
+* `PATCH /folders/{folder_id}` — `{ "name": "New name" }`
+* `DELETE /folders/{folder_id}`
+
+### Storage
+* `GET /storage/stats` — totals by folder and MIME type (scans up to 200 messages per folder)
+* `GET /storage/duplicates` — groups with the same name and size
+* `GET /folders/empty` — folders with no media messages
+* `GET /files/{message_id}/media-info?folder_id=` — duration/dimensions for video and audio
