@@ -10,7 +10,7 @@ use crate::vpn_optimizer::NetworkConfig;
 use grammers_client::types::{Media, Peer};
 use grammers_client::InputMessage;
 use grammers_tl_types as tl;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -62,7 +62,7 @@ fn check_auth(req: &HttpRequest, api_state: &web::Data<ApiState>) -> Result<(), 
 
 // ──────────────────────────────── Endpoints ────────────────────────────────
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct HealthResponse {
     status: String,
     version: String,
@@ -1482,4 +1482,91 @@ pub fn configure_api(cfg: &mut web::ServiceConfig) {
        .service(api_storage_duplicates)
        .service(api_empty_folders)
        .service(api_media_info);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::{test, App};
+    use std::collections::HashSet;
+    use tokio::sync::Mutex;
+
+    fn dummy_telegram_state() -> Arc<TelegramState> {
+        Arc::new(TelegramState {
+            client: Arc::new(Mutex::new(None)),
+            login_token: Arc::new(Mutex::new(None)),
+            password_token: Arc::new(Mutex::new(None)),
+            api_id: Arc::new(Mutex::new(None)),
+            runner_shutdown: Arc::new(std::sync::Mutex::new(None)),
+            runner_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            peer_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            cancelled_transfers: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
+        })
+    }
+
+    fn test_app() -> App<
+        impl actix_web::dev::ServiceFactory<
+            actix_web::dev::ServiceRequest,
+            Config = (),
+            Response = actix_web::dev::ServiceResponse,
+            Error = actix_web::Error,
+            InitError = (),
+        >,
+    > {
+        App::new()
+            .app_data(web::Data::new(dummy_telegram_state()))
+            .app_data(web::Data::new(ApiState { key_hash: None }))
+            .app_data(web::Data::new(Arc::new(NetworkConfig::new())))
+            .configure(configure_api)
+    }
+
+    #[actix_rt::test]
+    async fn health_reports_ok_and_crate_version() {
+        let app = test::init_service(test_app()).await;
+        let req = test::TestRequest::get().uri("/api/v1/health").to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 200);
+        let body: HealthResponse = test::read_body_json(resp).await;
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.version, env!("CARGO_PKG_VERSION"));
+    }
+
+    #[actix_rt::test]
+    async fn expanded_routes_reject_missing_api_key() {
+        let app = test::init_service(test_app()).await;
+        let cases: &[(&str, &str)] = &[
+            ("DELETE", "/api/v1/files/1"),
+            ("POST", "/api/v1/files/1/copy"),
+            ("PATCH", "/api/v1/files/1"),
+            ("GET", "/api/v1/folders"),
+            ("POST", "/api/v1/folders"),
+            ("PATCH", "/api/v1/folders/1"),
+            ("DELETE", "/api/v1/folders/1"),
+            ("GET", "/api/v1/storage/stats"),
+            ("GET", "/api/v1/storage/duplicates"),
+            ("GET", "/api/v1/folders/empty"),
+            ("GET", "/api/v1/files/1/media-info"),
+        ];
+
+        for (method, uri) in cases {
+            let mut req = test::TestRequest::default().uri(uri);
+            req = match *method {
+                "GET" => req.method(actix_web::http::Method::GET),
+                "POST" => req
+                    .method(actix_web::http::Method::POST)
+                    .set_json(serde_json::json!({ "name": "test" })),
+                "PATCH" => req
+                    .method(actix_web::http::Method::PATCH)
+                    .set_json(serde_json::json!({ "name": "renamed" })),
+                "DELETE" => req.method(actix_web::http::Method::DELETE),
+                other => panic!("unexpected method {other}"),
+            };
+            let resp = test::call_service(&app, req.to_request()).await;
+            assert_eq!(
+                resp.status(),
+                401,
+                "{method} {uri} should reject unauthenticated callers"
+            );
+        }
+    }
 }
